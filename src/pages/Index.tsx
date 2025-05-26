@@ -44,12 +44,12 @@ const IndexPage: React.FC = () => {
   const [isProcessingAttempt, setIsProcessingAttempt] = useState<boolean>(false);
   const [wordAttempts, setWordAttempts] = useState<Map<string, number>>(new Map());
 
-  // Debug/developer Voice Recognition Status state
+  // Debug/developer Azure Speech Services Status state
   const [recognitionStatus, setRecognitionStatus] = useState<string[]>([]);
   const addRecognitionStatus = useCallback((msg: string) => {
     setRecognitionStatus(prev => [
-      `[${new Date().toLocaleTimeString()}] ${msg}`,
-      ...prev.slice(0, 19) // last 20
+      `${new Date().toLocaleTimeString()}: ${msg}`,
+      ...prev.slice(0, 49)
     ]);
   }, []);
 
@@ -137,6 +137,7 @@ const IndexPage: React.FC = () => {
 
     // Get all words from the transcript and alternatives
     const wordsHeard = transcript.toLowerCase().trim().split(/\s+/);
+    addRecognitionStatus(`Words heard: ${wordsHeard.join(', ')}`);
 
     // Get all possible words from alternatives
     const allPossibleWords = new Set<string>();
@@ -157,11 +158,16 @@ const IndexPage: React.FC = () => {
       });
     }
 
+    addRecognitionStatus(`All possible words: ${Array.from(allPossibleWords).join(', ')}`);
+    addRecognitionStatus(`Target word: ${currentWord.text.toLowerCase()}`);
+
     // Check each word against the target word
     const isCorrect = Array.from(allPossibleWords).some(word => {
       const targetWord = currentWord.text.toLowerCase();
-      if (word === targetWord) return true;
-      return areHomonyms(word, targetWord);
+      const isExactMatch = word === targetWord;
+      const isHomophoneMatch = areHomonyms(word, targetWord);
+      addRecognitionStatus(`Checking word "${word}": exact=${isExactMatch}, homophone=${isHomophoneMatch}`);
+      return isExactMatch || isHomophoneMatch;
     });
     addRecognitionStatus(`Evaluating correctness: ${isCorrect ? 'Correct' : 'Incorrect'}`);
 
@@ -322,7 +328,7 @@ const IndexPage: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-sky-300 to-indigo-300 flex flex-col items-center justify-center p-4">
-      {/* Debug/Dev Voice Recognition Status Panel */}
+      {/* Debug/Dev Azure Speech Services Status Panel */}
       {gameActive && !gameOver && (
         <div style={{
           position: 'absolute',
@@ -340,7 +346,7 @@ const IndexPage: React.FC = () => {
           overflowY: 'auto',
           boxShadow: '0 2px 10px #000a'
         }}>
-          <b>Voice Recognition Status</b>
+          <b>Azure Speech Services Status</b>
           <ul style={{paddingLeft:16}}>
             {recognitionStatus.map((msg, i) => <li key={i}>{msg}</li>)}
           </ul>
@@ -387,6 +393,7 @@ const IndexPage: React.FC = () => {
               isProcessing={isProcessing}
               setIsProcessing={setIsProcessing}
               addStatus={addRecognitionStatus}
+              expectedWords={[shuffledWords[currentWordIndex]?.text]}
             />
 
             <div className="flex justify-center items-center mt-4">

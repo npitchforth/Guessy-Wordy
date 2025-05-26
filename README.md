@@ -29,7 +29,7 @@ The project is built with:
 - TypeScript
 - Vite
 - Tailwind CSS
-- Web Speech API
+- Azure Speech Services for high-accuracy speech recognition
 
 ## Building for Production
 

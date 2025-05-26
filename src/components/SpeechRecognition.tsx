@@ -1,58 +1,8 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+/// <reference types="vite/client" />
+
+import React, { useState, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Mic, MicOff } from 'lucide-react';
-import { HOMOPHONE_MAP } from '@/data/homonyms';
-
-// Add Web Speech API type definitions
-declare global {
-  interface Window {
-    SpeechRecognition: new () => SpeechRecognition;
-    webkitSpeechRecognition: new () => SpeechRecognition;
-    speechRecognition: SpeechRecognition | null;
-  }
-}
-
-// Define the SpeechRecognition interface
-interface SpeechRecognition extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  onstart: (event: Event) => void;
-  onend: (event: Event) => void;
-  onresult: (event: SpeechRecognitionEvent) => void;
-  onerror: (event: SpeechRecognitionErrorEvent) => void;
-  start: () => void;
-  stop: () => void;
-  abort: () => void;
-}
-
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionErrorEvent extends Event {
-  error: string;
-  message: string;
-}
 
 interface SpeechRecognitionProps {
   onResult: (transcript: string, alternatives?: Array<{ transcript: string; confidence: number }>) => void;
@@ -61,28 +11,25 @@ interface SpeechRecognitionProps {
   isProcessing: boolean;
   setIsProcessing: (isProcessing: boolean) => void;
   addStatus?: (msg: string) => void;
+  expectedWords?: string[];
 }
 
-const SpeechRecognition: React.FC<SpeechRecognitionProps> = ({ 
-  onResult, 
-  isListening, 
+const SpeechRecognition: React.FC<SpeechRecognitionProps> = ({
+  onResult,
+  isListening,
   setIsListening,
   isProcessing,
   setIsProcessing,
-  addStatus
+  addStatus,
+  expectedWords = []
 }) => {
   const [errorMessage, setErrorMessage] = useState<string>('');
-  const [lastTranscript, setLastTranscript] = useState<string>('');
-  const [recognitionInstance, setRecognitionInstance] = useState<SpeechRecognition | null>(null);
-
-  // For short word auto-finalization
-  const interimTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastInterim = useRef<string | null>(null);
-  const lastAlternatives = useRef<any[]>([]);
-  const hasProcessedAnswer = useRef<boolean>(false);
-
-  // Use a ref for guarding result processing
-  const isHandlingResultRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingStartTimeRef = useRef<number>(0);
+  const MIN_RECORDING_DURATION = 100; // Reduced to 100ms for very short words
+  const MAX_RECORDING_DURATION = 2000; // Reduced to 2 seconds max
+  const recordingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const getMicrophoneButtonClass = () => {
     if (isProcessing) {
@@ -94,305 +41,260 @@ const SpeechRecognition: React.FC<SpeechRecognitionProps> = ({
     }
   };
 
-  const stopRecognition = useCallback(() => {
-    return new Promise<void>((resolve) => {
-      if (recognitionInstance) {
-        try {
-          recognitionInstance.stop();
-          setRecognitionInstance(null);
-          window.speechRecognition = null;
-          addStatus?.("Recognition stopped.");
-        } catch (error) {
-          console.error('Error stopping recognition:', error);
-          addStatus?.("Error stopping recognition.");
-        }
-      }
-      setIsListening(false);
-      setTimeout(resolve, 100);
-    });
-  }, [recognitionInstance, setIsListening, addStatus]);
-
-  const processTranscript = async (transcript: string, alternatives: Array<{ transcript: string; confidence: number }>) => {
-    if (hasProcessedAnswer.current) return;
-    hasProcessedAnswer.current = true;
-    addStatus?.(`Processing transcript: "${transcript}"`);
-    setIsProcessing(true);
-    setIsListening(false);
+  const startRecording = useCallback(async () => {
     try {
-      const normalizedTranscript = transcript.trim().toLowerCase();
-      addStatus?.(`Normalized transcript: "${normalizedTranscript}"`);
-      onResult(normalizedTranscript, alternatives);
-      addStatus?.("Called onResult with transcript.");
-      await new Promise(resolve => setTimeout(resolve, 500));
-      addStatus?.("Processing complete (waited 500ms for UI feedback).");
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000, // Set to 16kHz directly
+          sampleSize: 16,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        } 
+      });
+      
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus',
+        audioBitsPerSecond: 16000
+      });
+      
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      recordingStartTimeRef.current = Date.now();
+
+      // Set a maximum recording duration
+      recordingTimeoutRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+          stopRecording();
+        }
+      }, MAX_RECORDING_DURATION);
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+          addStatus?.(`Received audio chunk: ${event.data.size} bytes`);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        if (recordingTimeoutRef.current) {
+          clearTimeout(recordingTimeoutRef.current);
+          recordingTimeoutRef.current = null;
+        }
+
+        const recordingDuration = Date.now() - recordingStartTimeRef.current;
+        addStatus?.(`Recording duration: ${recordingDuration}ms`);
+
+        if (recordingDuration < MIN_RECORDING_DURATION) {
+          addStatus?.(`Recording too short (${recordingDuration}ms), minimum is ${MIN_RECORDING_DURATION}ms`);
+          setErrorMessage('Recording too short. Please speak for at least 100ms.');
+          setIsListening(false);
+          return;
+        }
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
+        addStatus?.(`Total audio size: ${audioBlob.size} bytes`);
+        await processAudio(audioBlob);
+        
+        // Clean up
+        stream.getTracks().forEach(track => track.stop());
+        mediaRecorderRef.current = null;
+        audioChunksRef.current = [];
+      };
+
+      // Start recording and collect all data in a single chunk
+      mediaRecorder.start();
+      setIsListening(true);
+      setErrorMessage('');
+      addStatus?.("Recording started");
     } catch (error) {
-      console.error('Error processing transcript:', error);
+      console.error('Error starting recording:', error);
+      setErrorMessage('Error accessing microphone. Please check permissions.');
+      addStatus?.("Error starting recording");
+    }
+  }, [setIsListening, addStatus]);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsListening(false);
+      addStatus?.("Recording stopped");
+    }
+  }, [setIsListening, addStatus]);
+
+  const processAudio = async (audioBlob: Blob) => {
+    setIsProcessing(true);
+    addStatus?.("Processing audio...");
+
+    try {
+      // Convert audio to WAV format
+      const audioContext = new AudioContext();
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      addStatus?.(`Original audio details: ${audioBuffer.numberOfChannels} channels, ${audioBuffer.sampleRate}Hz, ${audioBuffer.length} samples`);
+      
+      // Resample to 16kHz
+      const resampledBuffer = await resampleAudio(audioBuffer, 16000);
+      addStatus?.(`Resampled audio details: ${resampledBuffer.numberOfChannels} channels, ${resampledBuffer.sampleRate}Hz, ${resampledBuffer.length} samples`);
+      
+      // Create WAV file
+      const wavBlob = await convertToWav(resampledBuffer);
+      addStatus?.(`Converted to WAV: ${wavBlob.size} bytes`);
+
+      // Get Azure credentials from environment variables
+      const subscriptionKey = import.meta.env.VITE_AZURE_SPEECH_KEY;
+      const region = import.meta.env.VITE_AZURE_SPEECH_REGION;
+
+      if (!subscriptionKey || !region) {
+        throw new Error('Azure Speech credentials not configured');
+      }
+
+      // Call Azure Speech to Text API
+      const speechContext = expectedWords.length > 0 
+        ? `&speechcontext={"phrases":${JSON.stringify(expectedWords)}}`
+        : '';
+      
+      const response = await fetch(
+        `https://${region}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed${speechContext}`,
+        {
+          method: 'POST',
+          headers: {
+            'Ocp-Apim-Subscription-Key': subscriptionKey,
+            'Content-Type': 'audio/wav; codecs=audio/pcm; samplerate=16000',
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: wavBlob
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        addStatus?.(`Azure API error: ${response.status} ${response.statusText}`);
+        addStatus?.(`Error details: ${errorText}`);
+        throw new Error(`Azure API error: ${response.statusText}. Details: ${errorText}`);
+      }
+
+      const result = await response.json();
+      addStatus?.("Received response from Azure");
+      addStatus?.(`Recognition status: ${result.RecognitionStatus}`);
+      addStatus?.(`Full response: ${JSON.stringify(result, null, 2)}`);
+
+      if (result.RecognitionStatus === 'Success') {
+        const transcript = result.DisplayText;
+        const alternatives = result.NBest?.map((item: any) => ({
+          transcript: item.Display,
+          confidence: item.Confidence
+        })) || [];
+
+        onResult(transcript, alternatives);
+        addStatus?.("Successfully processed speech");
+      } else {
+        throw new Error(`Recognition failed: ${result.RecognitionStatus}`);
+      }
+    } catch (error) {
+      console.error('Error processing audio:', error);
       setErrorMessage('Error processing speech. Please try again.');
-      addStatus?.("Error processing transcript.");
+      addStatus?.(`Error processing audio: ${error.message}`);
     } finally {
       setIsProcessing(false);
-      setIsListening(false);
-      if (recognitionInstance) {
-        try {
-          recognitionInstance.stop();
-          setRecognitionInstance(null);
-          window.speechRecognition = null;
-          addStatus?.("Recognition stopped after processing.");
-        } catch (error) {
-          console.error('Error stopping recognition:', error);
-          addStatus?.("Error stopping recognition in finally.");
-        }
-      }
-      isHandlingResultRef.current = false;
-      addStatus?.("Result processing unlocked.");
     }
   };
 
-  const initializeRecognition = useCallback(() => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      setErrorMessage('Speech recognition is not supported in this browser.');
-      addStatus?.("Speech recognition not supported in browser.");
-      return null;
+  const convertToWav = async (audioBuffer: AudioBuffer): Promise<Blob> => {
+    const numChannels = 1;
+    const sampleRate = 16000;
+    const format = 1; // PCM
+    const bitDepth = 16;
+
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = audioBuffer.length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataSize);
+    const view = new DataView(buffer);
+
+    // RIFF identifier
+    writeString(view, 0, 'RIFF');
+    // RIFF chunk length
+    view.setUint32(4, 36 + dataSize, true);
+    // RIFF type
+    writeString(view, 8, 'WAVE');
+    // format chunk identifier
+    writeString(view, 12, 'fmt ');
+    // format chunk length
+    view.setUint32(16, 16, true);
+    // sample format (raw)
+    view.setUint16(20, format, true);
+    // channel count
+    view.setUint16(22, numChannels, true);
+    // sample rate
+    view.setUint32(24, sampleRate, true);
+    // byte rate (sample rate * block align)
+    view.setUint32(28, byteRate, true);
+    // block align (channel count * bytes per sample)
+    view.setUint16(32, blockAlign, true);
+    // bits per sample
+    view.setUint16(34, bitDepth, true);
+    // data chunk identifier
+    writeString(view, 36, 'data');
+    // data chunk length
+    view.setUint32(40, dataSize, true);
+
+    // Write the PCM samples
+    const offset = 44;
+    const channelData = audioBuffer.getChannelData(0);
+    for (let i = 0; i < channelData.length; i++) {
+      const sample = Math.max(-1, Math.min(1, channelData[i]));
+      const value = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset + i * 2, value, true);
     }
-    if (window.speechRecognition) {
-      try {
-        window.speechRecognition.stop();
-        window.speechRecognition = null;
-        addStatus?.("Stopped existing global recognition instance.");
-      } catch (error) {
-        console.error('Error stopping existing recognition:', error);
-        addStatus?.("Error stopping existing global recognition.");
-      }
+
+    return new Blob([buffer], { type: 'audio/wav' });
+  };
+
+  const writeString = (view: DataView, offset: number, string: string) => {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
     }
-    if (recognitionInstance) {
-      try {
-        recognitionInstance.stop();
-        setRecognitionInstance(null);
-        addStatus?.("Stopped existing component recognition instance.");
-      } catch (error) {
-        console.error('Error stopping existing recognition:', error);
-        addStatus?.("Error stopping existing component recognition.");
-      }
-    }
-    return new Promise<SpeechRecognition | null>((resolve) => {
-      setTimeout(() => {
-        try {
-          const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-          const recognition = new SpeechRecognitionAPI();
+  };
 
-          recognition.continuous = false;
-          recognition.interimResults = true;
-          recognition.lang = 'en-AU';
+  const resampleAudio = async (audioBuffer: AudioBuffer, targetSampleRate: number): Promise<AudioBuffer> => {
+    const offlineContext = new OfflineAudioContext(
+      audioBuffer.numberOfChannels,
+      Math.round(audioBuffer.length * targetSampleRate / audioBuffer.sampleRate),
+      targetSampleRate
+    );
 
-          recognition.onstart = () => {
-            addStatus?.("Listening started (onstart).");
-            setIsListening(true);
-            setLastTranscript('');
-            setIsProcessing(false);
-            setErrorMessage('');
-            hasProcessedAnswer.current = false;
-            lastInterim.current = null;
-            lastAlternatives.current = [];
-            if (interimTimeoutRef.current) {
-              clearTimeout(interimTimeoutRef.current);
-              interimTimeoutRef.current = null;
-            }
-          };
+    const source = offlineContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offlineContext.destination);
+    source.start();
 
-          recognition.onend = () => {
-            addStatus?.("Listening ended (onend).");
-            if (interimTimeoutRef.current) {
-              clearTimeout(interimTimeoutRef.current);
-              interimTimeoutRef.current = null;
-            }
-            // If no answer was processed yet, and we have an interim, process it
-            if (!hasProcessedAnswer.current && lastInterim.current) {
-              addStatus?.(`Recognition ended, processing last interim: "${lastInterim.current}"`);
-              processTranscript(lastInterim.current, lastAlternatives.current);
-              lastInterim.current = null;
-              lastAlternatives.current = [];
-            }
-            setRecognitionInstance(null);
-            window.speechRecognition = null;
-          };
+    return await offlineContext.startRendering();
+  };
 
-          recognition.onresult = (event: SpeechRecognitionEvent) => {
-            setErrorMessage('');
-            try {
-              if (hasProcessedAnswer.current) {
-                addStatus?.("Already processed an answer, ignoring further results.");
-                return;
-              }
-              const resultIndex = event.results.length - 1;
-              const result = event.results[resultIndex];
-              const alternatives = Array.from({ length: event.results[0].length }, (_, i) => ({
-                transcript: event.results[0][i].transcript,
-                confidence: event.results[0][i].confidence || 0
-              }));
-              alternatives.sort((a, b) => b.confidence - a.confidence);
-
-              // FINAL RESULT: process only if not already processed
-              if (result.isFinal) {
-                if (interimTimeoutRef.current) {
-                  clearTimeout(interimTimeoutRef.current);
-                  interimTimeoutRef.current = null;
-                }
-                addStatus?.("Final result received and locked for processing.");
-                const bestMatch = alternatives[0];
-                setLastTranscript(bestMatch.transcript);
-                processTranscript(bestMatch.transcript, alternatives);
-                lastInterim.current = null;
-                lastAlternatives.current = [];
-                return;
-              }
-
-              // INTERIM RESULT: start/reset a 300ms timer
-              if (alternatives[0].transcript.trim()) {
-                lastInterim.current = alternatives[0].transcript;
-                lastAlternatives.current = alternatives;
-                addStatus?.(`Interim result: "${alternatives[0].transcript}" (starting 300ms timer)`);
-                if (interimTimeoutRef.current) {
-                  clearTimeout(interimTimeoutRef.current);
-                }
-                interimTimeoutRef.current = setTimeout(() => {
-                  if (hasProcessedAnswer.current) return;
-                  addStatus?.(`300ms silence after interim, using "${lastInterim.current}" as answer`);
-                  processTranscript(lastInterim.current, lastAlternatives.current);
-                  lastInterim.current = null;
-                  lastAlternatives.current = [];
-                  if (recognitionInstance) recognitionInstance.stop();
-                }, 300);
-              }
-            } catch (error) {
-              console.error('Error in onresult:', error);
-              isHandlingResultRef.current = false;
-              addStatus?.("Error in onresult handler.");
-            }
-          };
-
-          recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-            addStatus?.(`Recognition error: ${event.error}`);
-            setIsProcessing(false);
-            setIsListening(false);
-            if (interimTimeoutRef.current) {
-              clearTimeout(interimTimeoutRef.current);
-              interimTimeoutRef.current = null;
-            }
-            if (event.error === 'not-allowed') {
-              setErrorMessage('Microphone access was denied. Please allow microphone access in your browser settings and try again.');
-              stopRecognition();
-            } else if (event.error === 'no-speech') {
-              setErrorMessage('No speech detected. Please try speaking again.');
-              stopRecognition();
-            } else if (event.error === 'audio-capture') {
-              setErrorMessage('No microphone was found. Please ensure your microphone is properly connected.');
-              stopRecognition();
-            } else if (event.error === 'network') {
-              setErrorMessage('Network error occurred. Please check your internet connection.');
-              stopRecognition();
-            } else if (event.error === 'aborted') {
-              addStatus?.('Recognition aborted - this is normal during cleanup.');
-              stopRecognition();
-            } else {
-              setErrorMessage('There was an error with speech recognition. Please try again.');
-              stopRecognition();
-            }
-            isHandlingResultRef.current = false;
-            hasProcessedAnswer.current = true;
-          };
-
-          setRecognitionInstance(recognition);
-          window.speechRecognition = recognition;
-          resolve(recognition);
-        } catch (error) {
-          console.error('Error creating speech recognition:', error);
-          setErrorMessage('Failed to initialize speech recognition. Please try again.');
-          addStatus?.("Error creating speech recognition instance.");
-          resolve(null);
-        }
-      }, 100);
-    });
-  }, [processTranscript, stopRecognition, recognitionInstance, setIsProcessing, addStatus]);
-
-  const toggleListening = useCallback(async () => {
-    addStatus?.(`Toggle listening called. isListening: ${isListening}, isProcessing: ${isProcessing}`);
+  const toggleRecording = useCallback(() => {
     if (isListening) {
-      await stopRecognition();
-      isHandlingResultRef.current = false;
-      hasProcessedAnswer.current = false;
-      addStatus?.("Stopped listening on toggle.");
+      stopRecording();
     } else {
-      if (window.speechRecognition) {
-        try {
-          window.speechRecognition.stop();
-          window.speechRecognition = null;
-          await new Promise(resolve => setTimeout(resolve, 100));
-        } catch (error) {
-          console.error('Error stopping existing recognition:', error);
-          addStatus?.("Error stopping global recognition in toggle.");
-        }
-      }
-
-      const recognition = await initializeRecognition();
-      if (recognition) {
-        try {
-          addStatus?.("Starting recognition instance.");
-          isHandlingResultRef.current = false;
-          hasProcessedAnswer.current = false;
-          recognition.start();
-        } catch (error) {
-          console.error('Error starting speech recognition:', error);
-          setErrorMessage('There was an error with speech recognition. Please try again.');
-          setIsListening(false);
-          setIsProcessing(false);
-          setRecognitionInstance(null);
-          window.speechRecognition = null;
-          isHandlingResultRef.current = false;
-          hasProcessedAnswer.current = false;
-          addStatus?.("Error starting recognition instance.");
-        }
-      }
+      startRecording();
     }
-  }, [isListening, initializeRecognition, stopRecognition, isProcessing, setIsListening, setIsProcessing, addStatus]);
-
-  useEffect(() => {
-    return () => {
-      stopRecognition();
-      isHandlingResultRef.current = false;
-      hasProcessedAnswer.current = false;
-      if (interimTimeoutRef.current) {
-        clearTimeout(interimTimeoutRef.current);
-        interimTimeoutRef.current = null;
-      }
-      addStatus?.("Component unmounted, recognition stopped.");
-    };
-  }, [stopRecognition, addStatus]);
+  }, [isListening, startRecording, stopRecording]);
 
   return (
-    <div className="flex flex-col items-center mt-6">
-      {errorMessage && (
-        <p className="text-red-500 mb-4">{errorMessage}</p>
-      )}
+    <div className="flex flex-col items-center gap-2">
       <Button
-        onClick={toggleListening}
-        className={`rounded-full w-16 h-16 flex items-center justify-center ${getMicrophoneButtonClass()}`}
-        aria-label={isListening ? 'Stop listening' : 'Start listening'}
+        onClick={toggleRecording}
         disabled={isProcessing}
+        className={`w-16 h-16 rounded-full ${getMicrophoneButtonClass()}`}
       >
-        {isListening ? <MicOff size={24} /> : <Mic size={24} />}
+        {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
       </Button>
-      <p className="mt-3 text-gray-600">
-        {isProcessing 
-          ? 'Processing...' 
-          : isListening 
-            ? 'Listening...' 
-            : 'Tap to speak'}
-      </p>
-      {lastTranscript && (
-        <div className="mt-2 text-xs text-gray-500">
-          <span>Last heard: </span>
-          <strong>{lastTranscript}</strong>
-        </div>
+      {errorMessage && (
+        <p className="text-red-500 text-sm mt-2">{errorMessage}</p>
       )}
     </div>
   );

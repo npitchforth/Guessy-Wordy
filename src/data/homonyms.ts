@@ -36,10 +36,10 @@ export const HOMONYM_GROUPS: HomonymGroup[] = [
     words: ['an', 'ann', 'anne']
   },
   {
-    words: ['with', 'wiz']  // Special case for voice recognition
+    words: ['with', 'wiz']  // Special case for Azure Speech recognition
   },
   {
-    words: ['he', 'hey']    // Special case for voice recognition
+    words: ['he', 'hey']    // Special case for Azure Speech recognition
   }
 ];
 
