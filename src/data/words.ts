@@ -1,0 +1,57 @@
+export interface Word {
+  text: string;
+  difficulty: 'easy' | 'medium' | 'hard';
+  category?: string;
+  phonetic?: string;
+}
+
+export const words: Word[] = [
+  { text: 'the', difficulty: 'easy' },
+  { text: 'and', difficulty: 'easy' },
+  { text: 'to', difficulty: 'easy' },
+  { text: 'in', difficulty: 'easy' },
+  { text: 'is', difficulty: 'easy' },
+  { text: 'you', difficulty: 'easy' },
+  { text: 'that', difficulty: 'easy' },
+  { text: 'it', difficulty: 'easy' },
+  { text: 'he', difficulty: 'easy' },
+  { text: 'was', difficulty: 'easy' },
+  { text: 'for', difficulty: 'easy' },
+  { text: 'on', difficulty: 'easy' },
+  { text: 'are', difficulty: 'easy' },
+  { text: 'as', difficulty: 'easy' },
+  { text: 'with', difficulty: 'easy' },
+  { text: 'his', difficulty: 'easy' },
+  { text: 'they', difficulty: 'easy' },
+  { text: 'at', difficulty: 'easy' },
+  { text: 'be', difficulty: 'easy' },
+  { text: 'this', difficulty: 'easy' },
+  { text: 'have', difficulty: 'medium' },
+  { text: 'from', difficulty: 'medium' },
+  { text: 'or', difficulty: 'medium' },
+  { text: 'one', difficulty: 'medium' },
+  { text: 'had', difficulty: 'medium' },
+  { text: 'by', difficulty: 'medium' },
+  { text: 'word', difficulty: 'medium' },
+  { text: 'but', difficulty: 'medium' },
+  { text: 'not', difficulty: 'medium' },
+  { text: 'what', difficulty: 'medium' },
+  { text: 'all', difficulty: 'medium' },
+  { text: 'were', difficulty: 'medium' },
+  { text: 'we', difficulty: 'medium' },
+  { text: 'when', difficulty: 'medium' },
+  { text: 'your', difficulty: 'medium' },
+  { text: 'can', difficulty: 'medium' },
+  { text: 'said', difficulty: 'medium' },
+  { text: 'there', difficulty: 'medium' },
+  { text: 'use', difficulty: 'medium' },
+  { text: 'an', difficulty: 'medium' },
+  { text: 'each', difficulty: 'hard' },
+  { text: 'which', difficulty: 'hard' },
+  { text: 'she', difficulty: 'hard' },
+  { text: 'do', difficulty: 'hard' },
+  { text: 'how', difficulty: 'hard' },
+  { text: 'their', difficulty: 'hard' },
+  { text: 'if', difficulty: 'hard' },
+  { text: 'will', difficulty: 'hard' }
+]; 
