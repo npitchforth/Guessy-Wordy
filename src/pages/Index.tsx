@@ -48,49 +48,77 @@ const IndexPage: React.FC = () => {
   const [recognitionStatus, setRecognitionStatus] = useState<string[]>([]);
   const addRecognitionStatus = useCallback((msg: string) => {
     setRecognitionStatus(prev => [
-      `${new Date().toLocaleTimeString()}: ${msg}`,
-      ...prev.slice(0, 49)
+      ...prev.slice(0, 49),
+      `${new Date().toLocaleTimeString()}: ${msg}`
     ]);
   }, []);
 
   const shuffleWords = useCallback(() => {
-    const availableWords = words.filter(word => !usedWords.has(word.text));
-    if (availableWords.length === 0) {
-      setUsedWords(new Set());
-      return [...words].sort(() => Math.random() - 0.5);
-    }
-    return [...availableWords].sort(() => Math.random() - 0.5);
-  }, [usedWords]);
+    // Simply shuffle all words - no filtering needed
+    return [...words].sort(() => Math.random() - 0.5);
+  }, []); // No dependencies needed since words is static
 
   useEffect(() => {
     if (gameActive && !gameOver) {
-      setShuffledWords(shuffleWords());
-      setCurrentWordIndex(0);
       setProgress(0);
       setIncorrectAttempts({});
       processingWordRef.current = null;
     }
-  }, [gameActive, gameOver, shuffleWords]);
+  }, [gameActive, gameOver]);
 
   const moveToNextWord = (correct: boolean) => {
+    // Get current word before updating index
     const currentWord = shuffledWords[currentWordIndex];
-
-    // Batch all state updates together
-    const nextIndex = currentWordIndex + 1;
-    const isLastWord = nextIndex >= shuffledWords.length;
-
-    // Create new state values
-    const newUsedWords = new Set([...usedWords, currentWord.text]);
-    const newProgress = isLastWord ? 100 : (nextIndex / shuffledWords.length) * 100;
-
-    setUsedWords(newUsedWords);
-    if (!isLastWord) {
-      setCurrentWordIndex(nextIndex);
-      setProgress(newProgress);
-      processingWordRef.current = null; // Allow processing the next word's result
-    } else {
-      endGame();
+    if (!currentWord) {
+      addRecognitionStatus('No current word found in moveToNextWord.');
+      return;
     }
+
+    // Mark current word as used
+    setUsedWords(prev => new Set([...prev, currentWord.text]));
+    
+    // Clear attempts for current word
+    setIncorrectAttempts(prev => {
+      const newAttempts = { ...prev };
+      delete newAttempts[currentWord.text];
+      return newAttempts;
+    });
+
+    // Move to next word
+    const nextIndex = currentWordIndex + 1;
+    if (nextIndex >= shuffledWords.length) {
+      endGame();
+      return;
+    }
+
+    // Update progress and current word index
+    setProgress((nextIndex / shuffledWords.length) * 100);
+    setCurrentWordIndex(nextIndex);
+    processingWordRef.current = null;
+    
+    const nextWord = shuffledWords[nextIndex];
+    addRecognitionStatus(`Moving to next word: "${nextWord.text}"`);
+  };
+
+  const startGame = () => {
+    // Reset all game state
+    setGameActive(true);
+    setGameOver(false);
+    setShowLog(false);
+    setGameLog([]);
+    setRecognitionStatus([]);
+    setIncorrectAttempts({});
+    setUsedWords(new Set());
+    processingWordRef.current = null;
+    
+    // Shuffle words once at game start
+    const newShuffledWords = shuffleWords();
+    setShuffledWords(newShuffledWords);
+    setCurrentWordIndex(0);
+    setProgress(0);
+    
+    addRecognitionStatus('Game started.');
+    addRecognitionStatus(`First word: "${newShuffledWords[0]?.text}"`);
   };
 
   const handleSpeechResult = useCallback((transcript, alternatives) => {
@@ -114,11 +142,12 @@ const IndexPage: React.FC = () => {
     }
     setIsProcessingAttempt(true);
 
+    // Get the current word using a functional update to ensure we have the latest state
     const currentWord = shuffledWords[currentWordIndex];
     if (!currentWord) {
+      addRecognitionStatus('No current word found. This should not happen during active game.');
       setIsProcessingAttempt(false);
       isProcessingAttemptRef.current = false;
-      addRecognitionStatus('No current word found.');
       return;
     }
 
@@ -136,8 +165,15 @@ const IndexPage: React.FC = () => {
     }
 
     // Get all words from the transcript and alternatives
-    const wordsHeard = transcript.toLowerCase().trim().split(/\s+/);
-    addRecognitionStatus(`Words heard: ${wordsHeard.join(', ')}`);
+    const normalizeWord = (word: string) => {
+      const normalized = word.toLowerCase().replace(/[.,!?]/g, '').trim();
+      addRecognitionStatus(`Normalizing word: "${word}" -> "${normalized}"`);
+      return normalized;
+    };
+    
+    addRecognitionStatus(`Raw transcript: "${transcript}"`);
+    const wordsHeard = transcript.split(/\s+/).map(normalizeWord);
+    addRecognitionStatus(`Normalized words heard: ${wordsHeard.join(', ')}`);
 
     // Get all possible words from alternatives
     const allPossibleWords = new Set<string>();
@@ -147,29 +183,44 @@ const IndexPage: React.FC = () => {
     const possibilities = alternatives
       ? alternatives
           .filter(p => p.confidence > 0.1)
-          .map(p => ({ word: p.transcript, confidence: p.confidence }))
-      : [{ word: transcript, confidence: 1.0 }];
+          .map(p => ({ word: normalizeWord(p.transcript), confidence: p.confidence }))
+      : [{ word: normalizeWord(transcript), confidence: 1.0 }];
 
     // Add all alternatives to possible words
     if (alternatives) {
       alternatives.forEach(alt => {
-        const altWords = alt.transcript.toLowerCase().trim().split(/\s+/);
+        addRecognitionStatus(`Processing alternative: "${alt.transcript}"`);
+        const altWords = alt.transcript.split(/\s+/).map(normalizeWord);
         altWords.forEach(word => allPossibleWords.add(word));
       });
     }
 
+    const targetWord = normalizeWord(currentWord.text);
+    addRecognitionStatus(`Target word (normalized): "${targetWord}"`);
     addRecognitionStatus(`All possible words: ${Array.from(allPossibleWords).join(', ')}`);
-    addRecognitionStatus(`Target word: ${currentWord.text.toLowerCase()}`);
 
     // Check each word against the target word
-    const isCorrect = Array.from(allPossibleWords).some(word => {
-      const targetWord = currentWord.text.toLowerCase();
-      const isExactMatch = word === targetWord;
+    let isCorrect = false;
+    for (const word of allPossibleWords) {
+      addRecognitionStatus(`Checking word: "${word}" against target: "${targetWord}"`);
+      
+      // First check for exact match
+      if (word === targetWord) {
+        addRecognitionStatus(`Exact match found: "${word}" matches "${targetWord}"`);
+        isCorrect = true;
+        break;
+      }
+      
+      // Then check for homonyms
       const isHomophoneMatch = areHomonyms(word, targetWord);
-      addRecognitionStatus(`Checking word "${word}": exact=${isExactMatch}, homophone=${isHomophoneMatch}`);
-      return isExactMatch || isHomophoneMatch;
-    });
-    addRecognitionStatus(`Evaluating correctness: ${isCorrect ? 'Correct' : 'Incorrect'}`);
+      addRecognitionStatus(`Homophone check: "${word}" with "${targetWord}" = ${isHomophoneMatch}`);
+      if (isHomophoneMatch) {
+        isCorrect = true;
+        break;
+      }
+    }
+    
+    addRecognitionStatus(`Final correctness: ${isCorrect ? 'Correct' : 'Incorrect'}`);
 
     // Calculate attempt number for logging
     const attemptNumber = currentAttempts + 1;
@@ -194,27 +245,6 @@ const IndexPage: React.FC = () => {
     };
     setGameLog(prev => [...prev, logEntry]);
     addRecognitionStatus(`Logged attempt for "${currentWord.text}": Attempt ${attemptNumber}, Correct: ${isCorrect}`);
-
-    // Enhanced logging
-    console.log('Speech Recognition Result:', {
-      targetWord: currentWord.text,
-      fullTranscript: transcript,
-      allWordsHeard: wordsHeard,
-      allPossibleWords: Array.from(allPossibleWords),
-      isCorrect,
-      attemptNumber,
-      currentAttempts,
-      timestamp: new Date().toISOString(),
-      wordMatches: Array.from(allPossibleWords).map(word => ({
-        word,
-        isMatch: word === currentWord.text.toLowerCase(),
-        isHomophoneMatch: areHomonyms(word, currentWord.text.toLowerCase()),
-        homophoneMapping: word
-      })),
-      possibilities,
-      hasAlternatives: !!alternatives,
-      alternativesCount: alternatives?.length || 0
-    });
 
     setIsListening(false);
     setIsProcessing(false);
@@ -247,11 +277,12 @@ const IndexPage: React.FC = () => {
       return newAttempts;
     });
 
+    // Wait for state updates to complete before unlocking
     setTimeout(() => {
       setIsProcessingAttempt(false);
       isProcessingAttemptRef.current = false;
       addRecognitionStatus('Unlocked result processing.');
-    }, 500);
+    }, 100);
   }, [
     gameActive, gameOver, isProcessingAttempt, shuffledWords, currentWordIndex,
     incorrectAttempts, moveToNextWord, setIsListening, setIsProcessing, toast, addRecognitionStatus
@@ -310,16 +341,6 @@ const IndexPage: React.FC = () => {
     processingWordRef.current = null;
     addRecognitionStatus('Game over!');
     console.log('Complete Game Log:', gameLog);
-  };
-
-  const startGame = () => {
-    setGameActive(true);
-    setGameOver(false);
-    setShowLog(false);
-    setGameLog([]);
-    setRecognitionStatus([]);
-    processingWordRef.current = null;
-    addRecognitionStatus('Game started.');
   };
 
   const handleShowAnswers = () => {
